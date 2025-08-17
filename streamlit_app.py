@@ -147,9 +147,13 @@ def update_streak(conn, key:str, completed_date:dt.date):
         else:
             streak = 1
     with conn:
-        conn.execute("INSERT INTO Streak(key, current_streak_days, last_completed_date) VALUES(?,?,?)
-                      ON CONFLICT(key) DO UPDATE SET current_streak_days=excluded.current_streak_days, last_completed_date=excluded.last_completed_date",
-                     (key, streak, completed_date.isoformat()))
+        conn.execute("""
+    INSERT INTO Streak(key, current_streak_days, last_completed_date)
+    VALUES(?,?,?)
+    ON CONFLICT(key) DO UPDATE SET
+      current_streak_days=excluded.current_streak_days,
+      last_completed_date=excluded.last_completed_date
+""", (key, streak, completed_date.isoformat()))
     return streak
 
 def streak_multiplier(streak_days:int)->float:
