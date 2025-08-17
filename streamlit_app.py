@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS TaskLog(
   task_id INTEGER,
   skill_id INTEGER,
   label TEXT,
+  sublabel TEXT,
   completed_at TEXT,
   minutes INTEGER,
   intensity TEXT,
@@ -146,31 +147,78 @@ def update_streak(conn, key:str, completed_date:dt.date):
         else:
             streak = 1
     with conn:
-        conn.execute("INSERT INTO Streak(key, current_streak_days, last_completed_date) VALUES(?,?,?)\n                      ON CONFLICT(key) DO UPDATE SET current_streak_days=excluded.current_streak_days, last_completed_date=excluded.last_completed_date",
+        conn.execute("INSERT INTO Streak(key, current_streak_days, last_completed_date) VALUES(?,?,?)
+                      ON CONFLICT(key) DO UPDATE SET current_streak_days=excluded.current_streak_days, last_completed_date=excluded.last_completed_date",
                      (key, streak, completed_date.isoformat()))
     return streak
 
 def streak_multiplier(streak_days:int)->float:
     return 1.0 + 0.1 * min(streak_days, STREAK_CAP)
 
-# ------------------------- Daily Config ----------------------
-# Pure local rules (no LLM). Required quests enforce penalties when unfinished at day-end.
+# ------------------------- Daily Config (with Subquests) -----
+# Each quest can now define "subquests": granular drill items with targets and bonuses
 DAILY_CFG = {
     "tiers": {
         "1": {
             "required": True,
             "quests": [
-                {"id":"squash_50","label":"Squash: 50 straight drives","skill":"Squash - Solo","base_xp":50,
-                 "achievements":[{"t":100,"xp":25},{"t":150,"xp":50},{"t":200,"xp":100}],
-                 "penalty":20,"streak_key":"squash_daily"},
-                {"id":"roadwork_20","label":"Roadwork: 20+ minutes","skill":"Roadwork","base_xp":50,
-                 "per_min_bonus":1, "penalty":15, "streak_key":"roadwork_daily"},
-                {"id":"rope_10","label":"Jump Rope: 10 min (southpaw + 1 skill)","skill":"Jump Rope","base_xp":40,
-                 "combo_bonus":10, "penalty":10, "streak_key":"jumprope_daily"},
-                {"id":"strength_day","label":"Strength / Lifts (if scheduled)","skill":"Strength / Lifts","base_xp":80,
-                 "pr_bonus":40, "penalty":30, "scheduled_days":[0,2,4], "streak_key":"strength_week"}, # Mon=0
-                {"id":"flex_10","label":"Flexibility: 10+ minutes","skill":"Flexibility","base_xp":20,
-                 "long_bonus":10, "penalty":10, "streak_key":"flex_daily"}
+                {
+                    "id":"squash_solo",
+                    "label":"Squash — Solo Session",
+                    "skill":"Squash - Solo",
+                    "penalty":20,
+                    "streak_key":"squash_daily",
+                    "subquests": [
+                        {"code":"sd_L","label":"50 straight drives — LEFT","target":50,"unit":"reps","base_xp":25,
+                         "prestige":[{"t":100,"xp":15},{"t":150,"xp":25},{"t":200,"xp":40}]},
+                        {"code":"sd_R","label":"50 straight drives — RIGHT","target":50,"unit":"reps","base_xp":25,
+                         "prestige":[{"t":100,"xp":15},{"t":150,"xp":25},{"t":200,"xp":40}]},
+                        {"code":"vol_L","label":"50 volleys — LEFT","target":50,"unit":"reps","base_xp":20},
+                        {"code":"vol_R","label":"50 volleys — RIGHT","target":50,"unit":"reps","base_xp":20},
+                        {"code":"fig8","label":"50 figure-8s (touches)","target":50,"unit":"reps","base_xp":20}
+                    ]
+                },
+                {
+                    "id":"roadwork_20",
+                    "label":"Roadwork: 20+ minutes",
+                    "skill":"Roadwork",
+                    "base_xp":50,
+                    "per_min_bonus":1,
+                    "penalty":15,
+                    "streak_key":"roadwork_daily"
+                },
+                {
+                    "id":"rope_10",
+                    "label":"Jump Rope: 10 min technique",
+                    "skill":"Jump Rope",
+                    "penalty":10,
+                    "streak_key":"jumprope_daily",
+                    "subquests":[
+                        {"code":"southpaw","label":"Southpaw flow","target":5,"unit":"min","base_xp":15},
+                        {"code":"cross","label":"Crossovers block","target":5,"unit":"min","base_xp":15},
+                        {"code":"footwork","label":"Footwork pattern (e.g., box)","target":5,"unit":"min","base_xp":10},
+                        {"code":"combo","label":"Combo chain clean","target":1,"unit":"set","base_xp":10}
+                    ]
+                },
+                {
+                    "id":"strength_day",
+                    "label":"Strength / Lifts (if scheduled)",
+                    "skill":"Strength / Lifts",
+                    "base_xp":80,
+                    "pr_bonus":40,
+                    "penalty":30,
+                    "scheduled_days":[0,2,4],  # Mon, Wed, Fri
+                    "streak_key":"strength_week"
+                },
+                {
+                    "id":"flex_10",
+                    "label":"Flexibility: 10+ minutes",
+                    "skill":"Flexibility",
+                    "base_xp":20,
+                    "long_bonus":10,
+                    "penalty":10,
+                    "streak_key":"flex_daily"
+                }
             ]
         },
         "2": {
@@ -194,7 +242,16 @@ DAILY_CFG = {
         "4": {
             "required": False,
             "quests": [
-                {"id":"piano","label":"Piano 20+ min","skill":"Piano","base_xp":50},
+                {
+                    "id":"piano",
+                    "label":"Piano 20+ min (specifics)",
+                    "skill":"Piano",
+                    "subquests":[
+                        {"code":"tech","label":"Technique (e.g., scales/Hanon)","target":5,"unit":"min","base_xp":15},
+                        {"code":"piece","label":"Repertoire measures slow practice","target":10,"unit":"min","base_xp":25},
+                        {"code":"metro","label":"Metronome +4 bpm clean rep","target":1,"unit":"milestone","base_xp":10}
+                    ]
+                },
                 {"id":"procreate","label":"Procreate 20+ min","skill":"Procreate","base_xp":50},
                 {"id":"coding","label":"Coding / Project 30+ min","skill":"Coding / Projects","base_xp":60},
                 {"id":"language","label":"Language 15+ min","skill":"Language","base_xp":40}
@@ -225,9 +282,9 @@ board_tab, progress_tab, config_tab = st.tabs(["Daily Board","Progress","Config"
 
 # ------------------------- Daily Board -----------------------
 with board_tab:
-    st.subheader("Daily Quest Board")
+    st.subheader("Daily Quest Board (granular)")
     total_gain, pending_penalty = 0, 0
-    logs_to_commit = []  # (skill_id, label, minutes, intensity, xp)
+    logs_to_commit = []  # (skill_id, label, sublabel, minutes, intensity, xp)
     streak_updates = []  # streak keys completed today
 
     weekday = TODAY.weekday()  # Mon=0
@@ -236,91 +293,108 @@ with board_tab:
         tier = DAILY_CFG["tiers"][tier_key]
         st.markdown(f"### Tier {tier_key} {'(required)' if tier['required'] else '(optional)'}")
         for q in tier["quests"]:
-            cols = st.columns([5,1.2,1.2,1.2,2])
-            done = cols[0].checkbox(q["label"], key=f"done_{q['id']}")
-            minutes = cols[1].number_input("min", 0, 240, 0, key=f"min_{q['id']}")
-            intensity = cols[2].selectbox("int", ["easy","standard","hard","max"], index=1, key=f"int_{q['id']}")
-            bonus = 0
+            # Container for the quest
+            with st.container(border=True):
+                st.markdown(f"**{q['label']}**")
+                cols_top = st.columns([1.4,1,1,1,1.2])
+                intensity = cols_top[2].selectbox("int", ["easy","standard","hard","max"], index=1, key=f"int_{q['id']}")
+                quest_gain = 0
+                quest_any_done = False
 
-            # Scheduled lift days only grant XP if scheduled, but you can still check for discipline
-            if q["id"] == "strength_day":
-                scheduled = weekday in q.get("scheduled_days", [])
-                cols[4].markdown("Scheduled: **{}**".format("Yes" if scheduled else "No"))
-                pr_hit = cols[3].checkbox("PR +40", key=f"pr_{q['id']}")
-                if pr_hit:
-                    bonus += q.get("pr_bonus", 0)
-                if not scheduled:
-                    # If not scheduled, reduce base XP to 0 but allow bonus for extra credit
-                    base_xp = 0
+                # Scheduled lift days note
+                if q.get("id") == "strength_day":
+                    scheduled = weekday in q.get("scheduled_days", [])
+                    cols_top[4].markdown("Scheduled: **{}**".format("Yes" if scheduled else "No"))
+
+                # Subquests rendering (granular drills)
+                if "subquests" in q:
+                    for sq in q["subquests"]:
+                        row = st.columns([3.4,0.9,0.9,1.2,1.2])
+                        done = row[0].checkbox(sq["label"], key=f"done_{q['id']}_{sq['code']}")
+                        achieved = row[1].number_input("amt", 0, 500, sq.get("target",0), key=f"ach_{q['id']}_{sq['code']}")
+                        minutes = row[2].number_input("min", 0, 240, 0, key=f"min_{q['id']}_{sq['code']}")
+                        base_xp = sq.get("base_xp", 0)
+                        bonus = 0
+                        # prestige bonuses if surpass targets
+                        for p in sq.get("prestige", []):
+                            if achieved >= p["t"]:
+                                bonus += p["xp"]
+                        if done:
+                            quest_any_done = True
+                            # streak multiplier per quest key
+                            s_days, _ = get_streak(conn, q.get("streak_key", q["id"]))
+                            s_mult = streak_multiplier(s_days)
+                            xm = INT_MULT[intensity]
+                            # Duration multiplier (light): +1 per extra hour scaled
+                            dur_mult = 1 + max(0, minutes - 10) / 60
+                            gain = round((base_xp + bonus) * xm * s_mult * dur_mult)
+                            quest_gain += gain
+                            sid = skill_id_by_name(q.get("skill")) or 1
+                            logs_to_commit.append((sid, q["label"], sq["label"], minutes, intensity, gain))
+                        # show guidance text
+                        row[4].markdown(f"Target: {sq.get('target','–')} {sq.get('unit','')} | base {base_xp} XP")
                 else:
-                    base_xp = q["base_xp"]
-            else:
-                base_xp = q["base_xp"]
+                    # Simple quests retain old behavior
+                    row = st.columns([2.6,0.9,0.9,1.2,1.2])
+                    done = row[0].checkbox("Mark done", key=f"done_{q['id']}")
+                    minutes = row[1].number_input("min", 0, 240, 0, key=f"min_{q['id']}")
+                    bonus = 0
+                    if q["id"] == "roadwork_20":
+                        bonus += max(0, minutes - 20) * q.get("per_min_bonus", 0)
+                    if q["id"] == "flex_10":
+                        long = row[2].checkbox("20+ min +10", key=f"long_{q['id']}")
+                        if long: bonus += q.get("long_bonus", 0)
+                    if q["id"] == "writing":
+                        deep = row[2].checkbox("Deep +20", key=f"deep_{q['id']}")
+                        if deep: bonus += q.get("deep_bonus", 0)
+                    if q["id"] == "study":
+                        inbox_zero = row[2].checkbox("Inbox zero +20", key=f"inb_{q['id']}")
+                        if inbox_zero: bonus += q.get("inbox_zero_bonus", 0)
+                    if q["id"] == "sleep_8h":
+                        bedtime = row[2].checkbox("Bedtime +20", key=f"bed_{q['id']}")
+                        if bedtime: bonus += q.get("bedtime_bonus", 0)
+                    if q["id"] == "selfcare":
+                        ampm = row[2].checkbox("AM+PM +10", key=f"ampm_{q['id']}")
+                        if ampm: bonus += q.get("am_pm_bonus", 0)
+                    if q["id"] == "strength_day":
+                        pr_hit = row[2].checkbox("PR +40", key=f"pr_{q['id']}")
+                        if pr_hit: bonus += q.get("pr_bonus", 0)
+                        scheduled = weekday in q.get("scheduled_days", [])
+                        base_xp = q["base_xp"] if scheduled else 0
+                    else:
+                        base_xp = q.get("base_xp", 0)
 
-            # Quest-specific bonuses
-            if q["id"] == "roadwork_20":
-                bonus += max(0, minutes - 20) * q.get("per_min_bonus", 0)
-            if q["id"] == "rope_10":
-                combo = cols[3].checkbox("Combo +10", key=f"combo_{q['id']}")
-                if combo: bonus += q.get("combo_bonus", 0)
-            if q["id"] == "flex_10":
-                long = cols[3].checkbox("20+ min +10", key=f"long_{q['id']}")
-                if long: bonus += q.get("long_bonus", 0)
-            if q["id"] == "writing":
-                deep = cols[3].checkbox("Deep +20", key=f"deep_{q['id']}")
-                if deep: bonus += q.get("deep_bonus", 0)
-            if q["id"] == "study":
-                inbox_zero = cols[3].checkbox("Inbox zero +20", key=f"inb_{q['id']}")
-                if inbox_zero: bonus += q.get("inbox_zero_bonus", 0)
-            if q["id"] == "sleep_8h":
-                bedtime = cols[3].checkbox("Bedtime +20", key=f"bed_{q['id']}")
-                if bedtime: bonus += q.get("bedtime_bonus", 0)
-            if q["id"] == "selfcare":
-                ampm = cols[3].checkbox("AM+PM +10", key=f"ampm_{q['id']}")
-                if ampm: bonus += q.get("am_pm_bonus", 0)
+                    if done:
+                        quest_any_done = True
+                        s_days, _ = get_streak(conn, q.get("streak_key", q["id"]))
+                        s_mult = streak_multiplier(s_days)
+                        xm = INT_MULT[intensity]
+                        dur_mult = 1 + max(0, minutes - 20) / 60
+                        gain = round((base_xp + bonus) * xm * s_mult * dur_mult)
+                        quest_gain += gain
+                        sid = skill_id_by_name(q.get("skill")) or 1
+                        logs_to_commit.append((sid, q["label"], None, minutes, intensity, gain))
 
-            # Achievements for squash drives (enter achieved run length)
-            if q["id"] == "squash_50":
-                achieved = cols[4].number_input("max in-row", 0, 400, 50, key=f"ach_{q['id']}")
-                for a in q.get("achievements", []):
-                    if achieved >= a["t"]:
-                        bonus += a["xp"]
-
-            # Compute XP if done
-            if done:
-                # Streak multiplier for the quest key
-                s_days, s_last = get_streak(conn, q.get("streak_key", q["id"]))
-                s_mult = streak_multiplier(s_days)
-                xm = INT_MULT[intensity]
-                # Duration factor: reward beyond a default baseline of 30 min for physical, 10–20 for others
-                if q["id"] in ("roadwork_20", "strength_day", "flex_10"):
-                    dur_mult = 1 + max(0, minutes - 20) / 60
-                elif q["id"] in ("rope_10", "squash_50"):
-                    dur_mult = 1 + max(0, minutes - 10) / 60
+                # Quest footer: streak update + penalties
+                total_gain += quest_gain
+                if quest_any_done:
+                    streak_updates.append(q.get("streak_key", q["id"]))
                 else:
-                    dur_mult = 1 + max(0, minutes - 30) / 60
-
-                gain = round((base_xp + bonus) * xm * s_mult * dur_mult)
-                total_gain += gain
-                streak_updates.append(q.get("streak_key", q["id"]))
-                sid = skill_id_by_name(q["skill"]) or 1
-                logs_to_commit.append((sid, q["label"], minutes, intensity, gain))
-            else:
-                if tier["required"]:
-                    # Penalty only considered at finalize
-                    pending_penalty += q.get("penalty", 0)
+                    if tier["required"]:
+                        pending_penalty += q.get("penalty", 0)
 
     st.markdown("---")
-    c1, c2, c3 = st.columns(3)
+    c1, c2 = st.columns(2)
     c1.metric("Potential XP (checked)", total_gain)
     c2.metric("Pending Penalty (required unchecked)", pending_penalty)
 
     if st.button("✅ Finalize Today"):
         with conn:
-            for sid, label, minutes, intensity, gain in logs_to_commit:
+            for sid, label, sublabel, minutes, intensity, gain in logs_to_commit:
                 conn.execute(
-                    "INSERT INTO TaskLog(task_id, skill_id, label, completed_at, minutes, intensity, notes, xp_awarded)\n                     VALUES(NULL,?,?,?,?,?,?,?)",
-                    (sid, sid, label, dt.datetime.now().isoformat(), minutes, intensity, "", gain)
+                    "INSERT INTO TaskLog(task_id, skill_id, label, sublabel, completed_at, minutes, intensity, notes, xp_awarded)
+                     VALUES(NULL,?,?,?,?,?,?,?,?)",
+                    (sid, sid, label, sublabel or "", dt.datetime.now().isoformat(), minutes, intensity, "", gain)
                 )
             # Apply penalties once
             if pending_penalty > 0:
@@ -370,16 +444,18 @@ with progress_tab:
 
     st.markdown("### Recent Logs (7 days)")
     since = (TODAY - dt.timedelta(days=7)).isoformat()
-    logs = conn.execute("SELECT completed_at, label, xp_awarded FROM TaskLog WHERE date(completed_at) >= ? ORDER BY completed_at DESC", (since,)).fetchall()
-    for ts, label, xp in logs:
-        st.write(f"{ts[:16]} — {label} (+{xp} XP)")
+    logs = conn.execute("SELECT completed_at, label, sublabel, xp_awarded FROM TaskLog WHERE date(completed_at) >= ? ORDER BY completed_at DESC", (since,)).fetchall()
+    for ts, label, sublabel, xp in logs:
+        sub = f" — {sublabel}" if sublabel else ""
+        st.write(f"{ts[:16]} — {label}{sub} (+{xp} XP)")
 
 # ------------------------- Config ----------------------------
 with config_tab:
     st.subheader("Config")
     st.write("This prototype runs **entirely local** (SQLite) and uses deterministic rules.")
-    st.write("You can edit the DAILY_CFG in the code to change XP, penalties, and scheduled lift days.")
+    st.write("Edit DAILY_CFG in the code to change subquests, targets, and XP.")
 
     if st.button("Reset DB (danger)"):
         DB_PATH.unlink(missing_ok=True)
         st.experimental_rerun()
+
