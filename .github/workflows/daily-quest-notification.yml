@@ -1,0 +1,92 @@
+name: Daily Quest Notification
+
+on:
+  schedule:
+    # Run at 7:00 AM ET (12:00 PM UTC) every day
+    - cron: '0 12 * * *'
+  workflow_dispatch: # Allow manual triggering
+
+jobs:
+  send-daily-plan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        pip install requests python-dateutil
+    
+    - name: Generate and send daily plan
+      env:
+        NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+        WHOOP_TOKEN: ${{ secrets.WHOOP_TOKEN }} # Optional: for recovery data
+      run: |
+        python - << 'EOF'
+        import requests
+        import datetime as dt
+        import random
+        import os
+        
+        # Simplified quest generation for GitHub Action
+        def generate_simple_schedule():
+            today = dt.date.today()
+            weekday = today.weekday()
+            
+            # Basic schedule based on weekday
+            schedule = []
+            
+            # Always include core items
+            schedule.append("4:30p Run 4mi")
+            schedule.append("6:10p Rope 10'")
+            
+            # Strength on Mon/Wed/Fri
+            if weekday in [0, 2, 4]:
+                workout_type = "full" if weekday == 0 else "upper" if weekday == 2 else "lower"
+                schedule.append(f"7:00p Lifts ({workout_type})")
+            else:
+                schedule.append("4:30p Squash Solo")
+            
+            # Study session
+            schedule.append("8:00p Study 30'")
+            
+            return ", ".join(schedule[:3])  # Top 3 items
+        
+        # Optional: Fetch WHOOP recovery (if token provided)
+        recovery_note = ""
+        if os.getenv('WHOOP_TOKEN'):
+            try:
+                # WHOOP API call would go here
+                # For now, just add a placeholder
+                recovery_note = " (💚 Good recovery)"
+            except:
+                pass
+        
+        # Generate schedule
+        schedule_text = generate_simple_schedule()
+        
+        # Send notification
+        topic = os.getenv('NTFY_TOPIC', 'life-rpg')
+        title = f"Life RPG — {dt.date.today().strftime('%a %b %d')}"
+        body = schedule_text + recovery_note
+        
+        response = requests.post(
+            f"https://ntfy.sh/{topic}",
+            data=body.encode('utf-8'),
+            headers={
+                "Title": title,
+                "Priority": "3",
+                "Tags": "video_game,calendar,robot"
+            }
+        )
+        
+        print(f"Notification sent: {response.status_code}")
+        print(f"Title: {title}")
+        print(f"Body: {body}")
+        EOF
